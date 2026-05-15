@@ -1,0 +1,21 @@
+#include <iostream>
+#include "engine/searcher.h"
+#include "os/indexer.h"
+
+int main() {
+    std::cout << "Starting Search Engine Initialization...\n";
+
+    // 1. Initialize the Core Engine
+    DataOrientedTrie engine;
+
+    // 2. Call the Windows OS layer to crawl a specific directory
+    // (Testing with the C: drive root, but be careful with permissions)
+    std::wstring searchTarget = L"C:\\Users\\Avik\'s Laptop\\Downloads"; 
+    crawl_directory(searchTarget, engine);
+
+    // 3. Save the resulting memory structures to disk
+    engine.saveToDisk("search_index.bin");
+
+    std::cout << "Engine ready. Exiting.\n";
+    return 0;
+}

@@ -1,0 +1,3 @@
+C:/Users/Avik's Laptop/Desktop/Search bar/build/CMakeFiles/MySearchApp.dir
+C:/Users/Avik's Laptop/Desktop/Search bar/build/CMakeFiles/edit_cache.dir
+C:/Users/Avik's Laptop/Desktop/Search bar/build/CMakeFiles/rebuild_cache.dir

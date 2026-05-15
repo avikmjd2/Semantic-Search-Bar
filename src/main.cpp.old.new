@@ -1,0 +1,73 @@
+#include <iostream>
+#include <string>
+#include <chrono>
+#include "engine/searcher.h"
+#include <algorithm>
+#include "os/indexer.h"
+
+int main() {
+    std::cout << "--- SEARCH ENGINE INITIALIZATION ---\n";
+    DataOrientedTrie engine;
+
+    // 1. Crawl the directory 
+    std::wstring searchTarget = L"C:\\Users\\Avik's Laptop\\Downloads"; 
+    std::cout << "Crawling: " << std::string(searchTarget.begin(), searchTarget.end()) << " ...\n";
+    crawl_directory(searchTarget, engine);
+
+    // 2. Serialize the memory arrays to SSD
+    engine.saveToDisk("search_index.bin");
+
+    std::cout << "\nIndex built. Ready for queries.\n";
+    std::cout << "------------------------------------\n";
+
+    std::string userInput;
+    int allowedMistakes = 2; // How forgiving the fuzzy search is
+
+    // 3. The REPL (Read-Eval-Print Loop)
+    while (true) {
+        std::cout << "\nSearch > ";
+        
+        // Use getline to allow multi-word searches with spaces
+        std::getline(std::cin, userInput);
+
+        // Exit conditions
+        if (userInput == "exit" || userInput == "quit") {
+            std::cout << "Shutting down engine...\n";
+            break; 
+        }
+
+        // Prevent searching if the user just hits Enter
+        if (userInput.empty()) {
+            continue; 
+        }
+
+        // Start the high-resolution timer
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        // --- RUN THE SEARCH ---
+        std::vector<std::pair<int,std::string>> results = engine.search(userInput, allowedMistakes);\
+        std::sort(results.begin(),results.end(),std::greater<std::pair<int, std::string>>());
+
+        // Stop the timer
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        // Print the results
+        if (results.empty()) {
+            std::cout << " No matches found.\n";
+        } else {
+            std::cout << " Found " << results.size() << " matches in " << duration.count() << " ms:\n";
+            
+            // Limit output to the top 10 so we don't flood the terminal buffer
+            int limit = std::min((int)results.size(), 20);
+            for (int i = 0; i < limit; ++i) {
+                std::cout << "  -> " << results[i].second << "\n";
+            }
+            if (results.size() > 20) {
+                std::cout << "  -> (...and " << (results.size() - 20) << " more)\n";
+            }
+        }
+    }
+
+    return 0;
+}
