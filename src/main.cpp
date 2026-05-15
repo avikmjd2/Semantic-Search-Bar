@@ -3,7 +3,9 @@
 #include <vector>
 #include <chrono>
 #include <algorithm>
+#include <windows.h>
 #include <unordered_map>
+#include "../webview.h"
 
 // Include your two engines
 #include "engine/searcher.h"
@@ -20,6 +22,26 @@ struct IndexedFile {
     std::vector<float> vector;
 };
 
+// Helper to escape backslashes and quotes for JSON
+std::string escape_json(const std::string &s) {
+    std::string escaped;
+    for (char c : s) {
+        if (c == '\\') escaped += "\\\\";
+        else if (c == '"') escaped += "\\\"";
+        else if (c == '\n') escaped += "\\n";
+        else if (c == '\r') escaped += "\\r";
+        else escaped += c;
+    }
+    return escaped;
+}
+
+struct SearchItem 
+{
+    std::string title;
+    std::string type;
+};
+
+
 struct RankedResult {
     std::string path;
     float hybridScore;
@@ -31,18 +53,18 @@ struct RankedResult {
     }
 };
 
-int main() {
+void init(DataOrientedTrie &engine,SemanticEngine &aiEngine,std::vector<IndexedFile> &semanticDatabase)
+{
     std::cout << "--- SEARCH ENGINE INITIALIZATION ---\n";
     
     // 1. Initialize Engines
-    DataOrientedTrie engine;
+    
     std::cout << "[System] Booting OpenVINO Semantic Engine...\n";
-    SemanticEngine aiEngine("openvino_model");
+    
     if (!aiEngine.isReady()) {
         std::cerr << "[Warning] Semantic AI Engine failed to load. Running in keyword-only mode.\n";
     }
     
-    std::vector<IndexedFile> semanticDatabase;
 
     // 2. Crawl the directory (Feeds the Trie)
     std::wstring searchTarget = L"C:\\Users\\Avik's Laptop\\Downloads"; 
@@ -87,41 +109,52 @@ int main() {
     std::cout << "\nIndex built. " << semanticDatabase.size() << " files vectorized. Ready for queries.\n";
     std::cout << "------------------------------------\n";
 
-    std::string userInput;
-    int allowedMistakes = 2; // How forgiving the fuzzy search is
+}
 
-    // 5. The REPL (Read-Eval-Print Loop)
-    while (true) {
-        std::cout << "\nSearch > ";
+
+int main() 
+{
+    DataOrientedTrie engine;
+    SemanticEngine aiEngine("openvino_model");
+    std::vector<IndexedFile> semanticDatabase;
+    init(engine,aiEngine,semanticDatabase);
+    int allowedMistakes = 2;
+
+
+    // Initialize the window
+    webview::webview w(true, nullptr);
+    w.set_title("Search Interface Engine");
+    w.set_size(600, 450, WEBVIEW_HINT_NONE);
+
+    // 3. The Backend Logic Bridge
+    w.bind("SearchBackend", [&](std::string req) -> std::string {
+        // req arrives as a JSON array string like: ["query"]
+        std::string query = "";
+        if (req.length() > 4) {
+            query = req.substr(2, req.length() - 4); 
+        }
         
-        // Use getline to allow multi-word searches with spaces
-        std::getline(std::cin, userInput);
+        // Convert query to lowercase for case-insensitive matching
+        std::transform(query.begin(), query.end(), query.begin(), ::tolower);
 
-        // Exit conditions
-        if (userInput == "exit" || userInput == "quit") {
+        if (query == "exit" || query == "quit") 
+        {
             std::cout << "Shutting down engine...\n";
-            break; 
+            w.terminate();
+            return "[]"; 
         }
 
-        if (userInput.empty()) continue; 
+        if (query.empty()) return "[]";
+        std::vector<std::pair<int, std::string>> keywordHits = engine.search(query, allowedMistakes);
 
-        // Start the high-resolution timer
-        auto start_time = std::chrono::high_resolution_clock::now();
-
-        // --- STEP A: FIRE KEYWORD TRIE ---
-        // Your existing engine returns pairs of <budget_left, path>
-        std::vector<std::pair<int, std::string>> keywordHits = engine.search(userInput, allowedMistakes);
-        
-        // Hash them for instant lookup during hybrid blending
         std::unordered_map<std::string, int> fastKeywordMap;
-        for (const auto& hit : keywordHits) {
+        for (const auto& hit : keywordHits) 
+        {
             fastKeywordMap[hit.second] = hit.first; // Store the remaining budget
         }
 
-        // --- STEP B: FIRE SEMANTIC AI ---
-        std::vector<float> queryVector = aiEngine.getEmbedding(userInput);
-
-        // --- STEP C: HYBRID BLENDING ---
+        //aiEngine
+        std::vector<float> queryVector = aiEngine.getEmbedding(query);
         std::vector<RankedResult> finalResults;
         finalResults.reserve(semanticDatabase.size());
 
@@ -146,42 +179,195 @@ int main() {
             finalResults.push_back({file.path, finalScore, keyMatch});
         }
 
-        // --- STEP D: SORT AND RENDER ---
         std::sort(finalResults.begin(), finalResults.end());
-
-        // Stop the timer
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-        // Filter out noise: only keep results above a meaningful threshold
         const float SCORE_THRESHOLD = 0.05f;
         std::vector<RankedResult> filteredResults;
-        for (const auto& res : finalResults) {
-            if (res.hybridScore > SCORE_THRESHOLD) {
+        for (const auto& res : finalResults) 
+        {
+            if (res.hybridScore > SCORE_THRESHOLD) 
+            {
                 filteredResults.push_back(res);
             }
         }
 
-        if (filteredResults.empty()) {
-            std::cout << " No matches found.\n";
-        } else {
-            std::cout << " Returned " << filteredResults.size() << " matches in " << duration.count() << " ms:\n";
-            
-            int limit = std::min((int)filteredResults.size(), 20);
-            for (int i = 0; i < limit; ++i) {
-                const auto& res = filteredResults[i];
-                
-                // Add a visual tag showing WHERE the match came from
-                std::string tag = res.keywordMatch ? "[Trie+AI]  " : "[Semantic] ";
-                
-                // Show the score for transparency
-                printf("  %s (%.2f) -> %s\n", tag.c_str(), res.hybridScore, res.path.c_str());
-            }
-            if ((int)filteredResults.size() > 20) {
-                std::cout << "  -> (...and " << (filteredResults.size() - 20) << " more)\n";
-            }
-        }
-    }
+        std::string jsonResult = "[";
+        bool first = true;
 
+        
+        if (filteredResults.empty()) 
+        {
+            jsonResult+="{\"title\": \"No result Found\",\"type\":\"None\"}";
+            first = false;
+        }
+        else
+        {
+            int limit = std::min((int)filteredResults.size(), 20);
+            for(int i=0;i<limit;i++)
+            {
+                const auto& res = filteredResults[i];
+                std::string tag = res.keywordMatch ? "[Trie+AI]  " : "[Semantic] ";
+
+                if (!first) jsonResult += ",";
+                jsonResult += "{\"title\": \"" + escape_json(res.path) + "\", \"type\": \"" + tag + "\"}";
+                first = false;                        
+
+            }
+
+        }
+
+        jsonResult += "]";
+
+        return jsonResult; // Return the filtered JSON string back to the UI
+    });
+
+    // 4. The Frontend Payload
+    w.set_html(R"html(
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                :root {
+                    --bg-main: #1c1c1c;
+                    --bg-input: #2d2d2d;
+                    --border-color: #3e3e42;
+                    --text-primary: #ffffff;
+                    --text-muted: #888888;
+                    --accent-color: #007acc;
+                    --hover-bg: #2a2d31;
+                }
+
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+
+                body {
+                    background-color: var(--bg-main);
+                    color: var(--text-primary);
+                    font-family: 'Segoe UI', system-ui, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    padding-top: 40px;
+                    height: 100vh;
+                    overflow: hidden;
+                }
+
+                .search-container {
+                    width: 90%;
+                    max-width: 550px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+
+                #search-input {
+                    width: 100%;
+                    background-color: var(--bg-input);
+                    color: var(--text-primary);
+                    border: 1px solid var(--border-color);
+                    border-radius: 8px;
+                    padding: 16px 20px;
+                    font-size: 22px;
+                    outline: none;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                    transition: border-color 0.2s ease;
+                }
+
+                #search-input:focus { border-color: var(--accent-color); }
+
+                #results-list {
+                    list-style: none;
+                    background-color: var(--bg-main);
+                    border-radius: 8px;
+                    max-height: 300px;
+                    overflow-y: auto;
+                }
+
+                .result-item {
+                    padding: 14px 20px;
+                    border-left: 3px solid transparent;
+                    cursor: pointer;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 16px;
+                }
+
+                .result-item:hover, .result-item.active {
+                    background-color: var(--hover-bg);
+                    border-left-color: var(--accent-color);
+                }
+
+                .item-title { font-weight: 500; }
+
+                .item-type {
+                    font-size: 12px;
+                    color: var(--text-muted);
+                    background-color: #1a1a1a;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    border: 1px solid var(--border-color);
+                }
+
+                ::-webkit-scrollbar { width: 8px; }
+                ::-webkit-scrollbar-track { background: var(--bg-main); }
+                ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+                ::-webkit-scrollbar-thumb:hover { background: #555; }
+            </style>
+        </head>
+        <body>
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="Search system tools..." autofocus autocomplete="off" spellcheck="false">
+                <ul id="results-list"></ul>
+            </div>
+
+            <script>
+                const input = document.getElementById('search-input');
+                const resultsList = document.getElementById('results-list');
+
+                // Draw the UI based on the array handed back by C++
+                function renderResults(resultsArray) {
+                    resultsList.innerHTML = ''; 
+                    
+                    resultsArray.forEach((item, index) => {
+                        const li = document.createElement('li');
+                        li.className = 'result-item';
+                        if (index === 0) li.classList.add('active'); 
+
+                        li.innerHTML = `
+                            <span class="item-title">${item.title}</span>
+                            <span class="item-type">${item.type}</span>
+                        `;
+
+                        // Handle selection
+                        li.addEventListener('click', () => {
+                            input.value = item.title;
+                            resultsList.innerHTML = '';
+                        });
+
+                        resultsList.appendChild(li);
+                    });
+                }
+
+                // Send keystrokes to the C++ backend
+                input.addEventListener('input', async (e) => {
+                    let query = e.target.value;
+                    // The C++ bridge automatically parses the JSON for us!
+                    let dataArray = await window.SearchBackend(query);
+                    renderResults(dataArray);
+                });
+
+                // Load all items immediately when the window opens
+                window.onload = async () => {
+                    input.focus();
+                    let initialData = await window.SearchBackend("");
+                    renderResults(initialData);
+                };
+            </script>
+        </body>
+        </html>
+    )html");
+
+    // 5. Start the engine loop
+    w.run();
     return 0;
 }
